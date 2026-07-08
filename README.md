@@ -44,13 +44,13 @@ preferences: favorite `genre`, favorite `mood`, target `energy`, a
 **How a score is computed.** Each song earns points from five factors that are
 added together:
 
-| Factor | Rule | Max points |
-|---|---|---|
-| Genre match | exact match with favorite genre | +2.0 |
-| Mood match | exact match with favorite mood | +1.5 |
-| Energy similarity | `1 - |song.energy - target_energy|` | +1.0 |
-| Tempo similarity | `1 - |song.tempo - target_tempo| / 60` (min 0) | +1.0 |
-| Acoustic preference | `acousticness` if the user likes acoustic, else `1 - acousticness` | +1.0 |
+| Factor              | Rule                                                                      | Max points |
+| ------------------- | ------------------------------------------------------------------------- | ---------- |
+| Genre match         | Exact match with favorite genre                                           | +2.0       |
+| Mood match          | Exact match with favorite mood                                            | +1.5       |
+| Energy similarity   | `1 - abs(song_energy - target_energy)`                                    | +1.0       |
+| Tempo similarity    | Closer tempo to the user's target BPM earns more points                   | +1.0       |
+| Acoustic preference | Acousticness if the user likes acoustic music; otherwise non-acousticness | +1.0       |
 
 The highest possible score is about **6.5**. Genre and mood dominate, so songs
 in the right style rise to the top, while energy, tempo, and acousticness act as
