@@ -1,3 +1,7 @@
-pandas
+# Core: the project runs fully offline with only pytest for the test suite.
 pytest
-streamlit
+
+# Optional: enables the Claude API explanation backend. The project still runs
+# without it (the explainer falls back to a deterministic, offline path), so
+# this is safe to omit for grading or offline use.
+anthropic

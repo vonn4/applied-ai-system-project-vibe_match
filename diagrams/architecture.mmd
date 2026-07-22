@@ -1,0 +1,54 @@
+%% VibeMatch AI - Hybrid Music Recommendation Advisor
+%% End-to-end architecture: input -> guardrails -> rule-based recommender
+%% -> retrieval -> hybrid AI explanation -> output
+flowchart TD
+    User["User profile
+    (genre, mood, energy,
+    tempo, likes_acoustic)"] --> Guard
+
+    subgraph Inputs["Data on disk"]
+        Catalog[("data/songs.csv
+        20-song catalog")]
+        Guide[("data/music_guide.md
+        genre & mood guide")]
+    end
+
+    Guard["Guardrails
+    (src/guardrails.py)
+    validate & normalize profile,
+    hard-check catalog"]
+    Catalog --> Guard
+
+    Guard -->|clean prefs + warnings| Rec["Rule-based Recommender
+    (src/recommender.py)
+    weighted content-based
+    scoring + ranking"]
+
+    Rec -->|top-k songs + reasons| Retr["Retrieval
+    (src/retrieval.py)
+    look up genre/mood
+    sections by heading"]
+    Guide --> Retr
+
+    Retr -->|reasons + guide context| Explain{"AI Explanation Layer
+    (src/explainer.py)
+    ANTHROPIC_API_KEY set?"}
+
+    Explain -->|yes| LLM["Claude API backend
+    model: claude-haiku-4-5
+    grounded, structured JSON"]
+    Explain -->|no / error / no SDK| FB["Deterministic fallback
+    template from reasons
+    + guide context"]
+
+    LLM --> Out["Structured explanation
+    summary / why_it_fits /
+    genre_mood_context / caveat"]
+    FB --> Out
+
+    Out --> Consumers["run_demo.py  |  evaluate.py"]
+
+    classDef store fill:#eef,stroke:#66a;
+    classDef ai fill:#efe,stroke:#6a6;
+    class Catalog,Guide store;
+    class LLM,FB,Explain ai;

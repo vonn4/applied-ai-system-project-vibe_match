@@ -1,48 +1,73 @@
-# 🎵 Music Recommender Simulation
+# 🎵 VibeMatch AI — Hybrid Music Recommendation Advisor
 
 ## Project Summary
 
-This is a small, rule-based music recommender that I built and tuned. It stores
-a catalog of 20 songs (each described by features like genre, mood, energy, and
-tempo) and a short "taste profile" for a user. For any profile, my version
-scores every song with a simple weighted formula, sorts the songs from best to
-worst match, and prints the top 5 along with a plain-language reason for each
-pick.
+VibeMatch AI is an **applied AI system** built on top of my original rule-based
+Music Recommender Simulation. The original project scored a 20-song catalog
+against a listener's stated taste (genre, mood, energy, tempo, acoustic
+preference) and printed a ranked top list. VibeMatch AI keeps that transparent
+rule-based engine as the decision-maker and wraps it with four new layers that
+make it a complete, defensible AI system:
 
-There is no machine learning here. The "intelligence" is a transparent scoring
-rule you can read and change by hand, which is exactly why it is a good way to
-see how a recommender turns raw data into ranked predictions.
+1. **Rule-based recommender** (preserved) — the deterministic, explainable
+   scoring engine that decides *what* to recommend.
+2. **Input validation & guardrails** — validates and normalizes listener
+   profiles and hard-checks the catalog before anything is scored.
+3. **Retrieval** — pulls genre/mood context from a local music guide document so
+   explanations are grounded in real background, not invented facts.
+4. **Hybrid AI explanation layer** — explains *why* each song was picked in a
+   structured, user-friendly way, using the Claude API when available and a
+   deterministic offline fallback otherwise.
+
+The rule-based recommender remains the single source of truth for ranking. The
+AI layer only *explains* decisions the rules already made — it never re-ranks.
 
 ---
 
-## How The System Works
+## Architecture
 
-**How real recommenders work.** Large services like Spotify or YouTube learn
-from data such as your likes, skips, saved playlists, and listening history, as
-well as song attributes like genre, mood, and tempo. They generally combine two
-ideas:
+```
+User profile ─▶ Guardrails ─▶ Rule-based Recommender ─▶ Retrieval ─▶ AI Explanation ─▶ Output
+   (raw)         validate/       weighted scoring          genre/mood      Claude API
+                 normalize        + ranking                context          or fallback
+```
 
-- **Collaborative filtering** — recommends items based on *other users'*
-  behavior ("people who liked what you liked also played this").
-- **Content-based filtering** — recommends items based on the *attributes of the
-  items themselves* (genre, mood, energy, tempo, etc.) compared to what you like.
+The full diagram lives in [diagrams/architecture.mmd](diagrams/architecture.mmd)
+(Mermaid). Component code:
 
-**What this project does.** This project is a simple **content-based weighted
-scoring system**. It does not use other users' behavior and it does not learn
-over time. It only compares one user's stated preferences to each song's
-attributes and adds up points.
+| Layer | File |
+|-------|------|
+| Rule-based recommender | [src/recommender.py](src/recommender.py) |
+| Guardrails | [src/guardrails.py](src/guardrails.py) |
+| Retrieval | [src/retrieval.py](src/retrieval.py) |
+| AI explanation (hybrid) | [src/explainer.py](src/explainer.py) |
+| End-to-end pipeline | [src/pipeline.py](src/pipeline.py) |
+| Music guide (retrieval corpus) | [data/music_guide.md](data/music_guide.md) |
+| Song catalog | [data/songs.csv](data/songs.csv) |
 
-**Song features used.** Each `Song` has: `genre`, `mood`, `energy` (0–1),
-`tempo_bpm`, `valence` (0–1), `danceability` (0–1), and `acousticness` (0–1).
-The scoring rule uses **genre, mood, energy, tempo_bpm, and acousticness**.
-(`valence` and `danceability` are stored in the data but not scored yet.)
+### How the hybrid explanation layer works
 
-**What the user profile stores.** A profile is a small dictionary of
-preferences: favorite `genre`, favorite `mood`, target `energy`, a
-`target_tempo` (BPM), and a boolean `likes_acoustic`.
+`explain(...)` returns the **same structured shape** regardless of backend, so
+the demo, the evaluator, and the tests are all backend-agnostic:
 
-**How a score is computed.** Each song earns points from five factors that are
-added together:
+```
+{ summary, why_it_fits, genre_mood_context, caveat, backend }
+```
+
+- **Claude API backend** — used only when `ANTHROPIC_API_KEY` is set *and* the
+  `anthropic` package is installed. Calls model `claude-haiku-4-5` with a prompt
+  built from the recommender's own reasons plus the retrieved guide context, and
+  requests a structured JSON response.
+- **Deterministic fallback** — used when there is no key, the package is not
+  installed, or the API call fails for any reason. Assembles the same four
+  fields directly from the scoring reasons and retrieved context.
+
+This means `run_demo.py`, `evaluate.py`, and `pytest` **all run fully offline**;
+the live model is a genuine enhancement, not a dependency.
+
+### The scoring rule (unchanged from the original)
+
+Each song earns points from five factors that are summed:
 
 | Factor              | Rule                                                                      | Max points |
 | ------------------- | ------------------------------------------------------------------------- | ---------- |
@@ -52,21 +77,7 @@ added together:
 | Tempo similarity    | Closer tempo to the user's target BPM earns more points                   | +1.0       |
 | Acoustic preference | Acousticness if the user likes acoustic music; otherwise non-acousticness | +1.0       |
 
-The highest possible score is about **6.5**. Genre and mood dominate, so songs
-in the right style rise to the top, while energy, tempo, and acousticness act as
-tie-breakers.
-
-**Data flow.**
-
-```
-user preferences  ->  score each song  ->  sort/rank (high to low)  ->  show top recommendations
-```
-
-Every song is scored, the list is sorted from highest score to lowest, and the
-top `k` (default 5) are returned. Each recommendation also carries a reason
-string built from the factors that actually contributed. The weights live as
-named constants at the top of `src/recommender.py` (`GENRE_WEIGHT`,
-`MOOD_WEIGHT`, etc.), so they are easy to experiment with.
+Weights live as named constants at the top of `src/recommender.py`.
 
 ---
 
@@ -74,173 +85,144 @@ named constants at the top of `src/recommender.py` (`GENRE_WEIGHT`,
 
 ### Setup
 
-1. Create a virtual environment (optional but recommended):
+1. (Optional) Create a virtual environment:
 
    ```bash
    python -m venv .venv
    source .venv/bin/activate      # Mac or Linux
    .venv\Scripts\activate         # Windows
+   ```
 
-2. Install dependencies
+2. Install dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+   `pytest` is the only required dependency. `anthropic` is optional — install
+   it only if you want live Claude-generated explanations.
+
+### Commands
 
 ```bash
-pip install -r requirements.txt
+python run_demo.py     # full end-to-end workflow for 3 profiles + 1 messy profile
+python evaluate.py     # reliability harness: PASS/FAIL checks + summary
+pytest                 # unit tests for every layer
 ```
 
-3. Run the app:
+### Enabling the Claude API backend (optional)
 
 ```bash
-python -m src.main
+export ANTHROPIC_API_KEY=sk-ant-...    # Mac/Linux
+$env:ANTHROPIC_API_KEY = "sk-ant-..."  # Windows PowerShell
+pip install anthropic
+python run_demo.py
 ```
 
-### Running Tests
+Without a key, the demo header prints `explanation backend: offline fallback`
+and everything still works.
 
-Run the tests with:
+---
+
+## Sample Outputs
+
+### 1. `python run_demo.py` — a well-formed profile (offline fallback)
+
+```
+======================================================================
+User profile: Lofi Study Session
+  raw input: {'genre': 'lofi', 'mood': 'focused', 'energy': 0.4, 'target_tempo': 78, 'likes_acoustic': True}
+----------------------------------------------------------------------
+1. Focus Flow - LoRoom (score: 6.25)
+   Summary:  Focus Flow by LoRoom scored 6.25 for your taste.
+   Why:      This song matches your favorite genre (lofi); fits the mood you want (focused); energy 0.40 is close to your target 0.40; tempo 80 BPM is close to your target 78 BPM; has the acoustic sound you enjoy.
+   Context:  About lofi music: Lofi (low-fidelity) is relaxed, beat-driven background music with a warm, hazy sound. Energy and tempo are low (roughly 70-90 BPM) and it is often instrumental. It is popular for studying, focusing, and winding down. About a focused mood: Focused music is steady and low-distraction, designed to help concentration. It usually has a repetitive, gentle beat and is common in lofi and ambient music for studying or working.
+   Caveat:   This pick comes from a small fixed catalog scored by simple rules, so it reflects your stated preferences only - not your listening history or how the song actually sounds to you.
+```
+
+### 2. `python run_demo.py` — the guardrail demo profile
+
+The last demo profile is deliberately broken (unknown mood, non-numeric energy,
+negative tempo) to show validation firing before any scoring happens:
+
+```
+======================================================================
+User profile: Messy Input (guardrail demo)
+  raw input: {'genre': 'POP', 'mood': 'party-vibes', 'energy': 'loud', 'target_tempo': -20, 'likes_acoustic': 'yes'}
+----------------------------------------------------------------------
+Guardrails adjusted the input:
+  ! Mood 'party-vibes' is not in the known catalog; it will simply not match any song.
+  ! Target energy 'loud' is not a number; defaulted to 0.5.
+  ! Target tempo -20.0 is not positive; defaulted to 120.0.
+  ! likes_acoustic 'yes' was not a boolean; interpreted as True.
+  -> using: {'genre': 'pop', 'mood': 'party-vibes', 'energy': 0.5, 'target_tempo': 120.0, 'likes_acoustic': True}
+----------------------------------------------------------------------
+1. Sunrise City - Neon Echo (score: 3.83)
+   Summary:  Sunrise City by Neon Echo scored 3.83 for your taste.
+   Why:      This song matches your favorite genre (pop); energy 0.82 is close to your target 0.50; tempo 118 BPM is close to your target 120 BPM.
+   Context:  About pop music: Pop is mainstream, hook-driven music built around catchy melodies and clear vocals. It usually sits at medium-to-high energy with danceable tempos around 100-130 BPM. Good for parties, driving, and easy everyday listening.
+   Caveat:   This pick comes from a small fixed catalog scored by simple rules, so it reflects your stated preferences only - not your listening history or how the song actually sounds to you.
+```
+
+### 3. `python evaluate.py` — reliability harness
+
+```
+VibeMatch AI - reliability evaluation
+
+  [PASS] [Pop Party] returns recommendations  (3 returned)
+  [PASS] [Pop Party] top pick genre == pop  (got 'pop')
+  [PASS] [Pop Party] top pick mood == happy  (got 'happy')
+  [PASS] [Pop Party] scores are sorted descending
+  [PASS] [Pop Party] explanation has all fields, non-empty  (backend=fallback)
+  ...
+  [PASS] [guardrails] messy profile produces warnings  (4 warnings)
+  [PASS] [guardrails] bad energy clamped into 0-1  (energy=0.5)
+  [PASS] [guardrails] empty catalog raises GuardrailError
+  [PASS] [retrieval] known genre returns context
+  [PASS] [retrieval] unknown terms return None safely
+
+--------------------------------------------------
+Reliability: 28/28 checks passed (100%).
+Result: RELIABLE - all checks passed.
+```
+
+---
+
+## Testing
 
 ```bash
 pytest
 ```
 
-You can add more tests in `tests/test_recommender.py`.
-
-#### Test Verification
-
-Actual `pytest` result from a local run:
+Covers the recommender, guardrails, retrieval, the explainer (including the
+offline-fallback path and API-failure handling), and the end-to-end pipeline:
 
 ```
-======================== test session starts =========================
-platform win32 -- Python 3.14.5, pytest-9.0.3, pluggy-1.6.0
-rootdir: C:\Users\Owner\source\ai110\ai110-module3show-musicrecommendersimulation-starter
-plugins: anyio-4.13.0
-collected 2 items
-
-tests\test_recommender.py ..                                    [100%]
-
-========================= 2 passed in 0.04s ==========================
+33 passed
 ```
-
----
-
-## Sample Recommendation Output
-
-Real output of `python -m src.main`:
-
-```
-============================================================
-User profile: Pop Party
-  genre=pop, mood=happy, energy=0.85, target_tempo=124, likes_acoustic=False
-------------------------------------------------------------
-Top recommendations:
-
-1. Dancefloor Gold - Neon Echo (score: 6.32)
-   Because: matches your favorite genre (pop); fits the mood you want (happy); energy 0.88 is close to your target 0.85; tempo 126 BPM is close to your target 124 BPM; is mostly non-acoustic, as you prefer
-2. Sunrise City - Neon Echo (score: 6.19)
-   Because: matches your favorite genre (pop); fits the mood you want (happy); energy 0.82 is close to your target 0.85; tempo 118 BPM is close to your target 124 BPM; is mostly non-acoustic, as you prefer
-3. Gym Hero - Max Pulse (score: 4.74)
-   Because: matches your favorite genre (pop); energy 0.93 is close to your target 0.85; tempo 132 BPM is close to your target 124 BPM; is mostly non-acoustic, as you prefer
-4. Festival Lights - Max Pulse (score: 4.32)
-   Because: fits the mood you want (happy); energy 0.90 is close to your target 0.85; tempo 128 BPM is close to your target 124 BPM; is mostly non-acoustic, as you prefer
-5. Rooftop Lights - Indigo Parade (score: 4.06)
-   Because: fits the mood you want (happy); energy 0.76 is close to your target 0.85; tempo 124 BPM is close to your target 124 BPM; is mostly non-acoustic, as you prefer
-
-============================================================
-User profile: Lofi Study Session
-  genre=lofi, mood=focused, energy=0.4, target_tempo=78, likes_acoustic=True
-------------------------------------------------------------
-Top recommendations:
-
-1. Focus Flow - LoRoom (score: 6.25)
-   Because: matches your favorite genre (lofi); fits the mood you want (focused); energy 0.40 is close to your target 0.40; tempo 80 BPM is close to your target 78 BPM; has the acoustic sound you enjoy
-2. Late Night Study - LoRoom (score: 6.25)
-   Because: matches your favorite genre (lofi); fits the mood you want (focused); energy 0.38 is close to your target 0.40; tempo 76 BPM is close to your target 78 BPM; has the acoustic sound you enjoy
-3. Quiet Pages - Paper Lanterns (score: 4.74)
-   Because: matches your favorite genre (lofi); energy 0.36 is close to your target 0.40; tempo 74 BPM is close to your target 78 BPM; has the acoustic sound you enjoy
-4. Library Rain - Paper Lanterns (score: 4.71)
-   Because: matches your favorite genre (lofi); energy 0.35 is close to your target 0.40; tempo 72 BPM is close to your target 78 BPM; has the acoustic sound you enjoy
-5. Midnight Coding - LoRoom (score: 4.69)
-   Because: matches your favorite genre (lofi); energy 0.42 is close to your target 0.40; tempo 78 BPM is close to your target 78 BPM; has the acoustic sound you enjoy
-
-============================================================
-User profile: Rock Workout
-  genre=rock, mood=intense, energy=0.92, target_tempo=148, likes_acoustic=False
-------------------------------------------------------------
-Top recommendations:
-
-1. Adrenaline Rush - Voltline (score: 6.40)
-   Because: matches your favorite genre (rock); fits the mood you want (intense); energy 0.92 is close to your target 0.92; tempo 150 BPM is close to your target 148 BPM; is mostly non-acoustic, as you prefer
-2. Deadlift Anthem - Max Pulse (score: 6.36)
-   Because: matches your favorite genre (rock); fits the mood you want (intense); energy 0.95 is close to your target 0.92; tempo 146 BPM is close to your target 148 BPM; is mostly non-acoustic, as you prefer
-3. Storm Runner - Voltline (score: 6.32)
-   Because: matches your favorite genre (rock); fits the mood you want (intense); energy 0.91 is close to your target 0.92; tempo 152 BPM is close to your target 148 BPM; is mostly non-acoustic, as you prefer
-4. Gym Hero - Max Pulse (score: 4.17)
-   Because: fits the mood you want (intense); energy 0.93 is close to your target 0.92; tempo 132 BPM is close to your target 148 BPM; is mostly non-acoustic, as you prefer
-5. Festival Lights - Max Pulse (score: 2.59)
-   Because: energy 0.90 is close to your target 0.92; tempo 128 BPM is close to your target 148 BPM; is mostly non-acoustic, as you prefer
-```
-
----
-
-## Experiments You Tried
-
-I tested three distinct user profiles to see how the scoring behaves for
-different kinds of listeners:
-
-- **Pop Party** — `pop`, `happy`, energy 0.85, target tempo 124, not acoustic.
-  A high-energy, upbeat listener.
-- **Lofi Study Session** — `lofi`, `focused`, energy 0.40, target tempo 78,
-  acoustic. A calm, low-energy studying listener.
-- **Rock Workout** — `rock`, `intense`, energy 0.92, target tempo 148, not
-  acoustic. A high-intensity, fast-tempo listener.
-
-**Comparing the outputs:**
-
-- **Pop Party** favored happy, high-energy, non-acoustic pop songs
-  (*Dancefloor Gold*, *Sunrise City* on top).
-- **Lofi Study Session** shifted toward lower-energy, slower, more acoustic lofi
-  songs (*Focus Flow*, *Late Night Study* on top).
-- **Rock Workout** favored intense, fast-tempo, high-energy rock songs
-  (*Adrenaline Rush*, *Deadlift Anthem*, *Storm Runner* on top).
-- **Gym Hero** appears in both the Pop Party and Rock Workout lists because it is
-  high energy and non-acoustic, even though it does not match every preference
-  (it is a pop song with an intense mood, so it partially fits both profiles).
-
-Because the weight constants live at the top of `src/recommender.py`, you can
-rerun `python -m src.main` after changing them to see how the rankings shift.
 
 ---
 
 ## Limitations and Risks
 
-- It only works on a tiny 20-song catalog, so "top 5" is a large fraction of
-  everything available.
-- It requires **exact** genre and mood strings; "indie pop" is treated as
-  completely different from "pop", and a typo would score zero on that factor.
-- It does not understand lyrics, language, artist, listening history, likes, or
-  skips.
-- It can over-favor whatever the biggest weights are (currently genre), so a
-  user who likes several genres only ever sees their single favorite.
-- `valence` and `danceability` are collected but not used by the current score.
+- Works on a tiny **20-song catalog**, so "top 3" is a large fraction of what's
+  available.
+- Requires **exact** genre/mood strings; "indie pop" is treated as unrelated to
+  "pop", and an unknown value simply scores zero on that factor (guardrails warn
+  about it but don't correct the meaning).
+- Does not use listening history, likes, skips, lyrics, or audio itself.
+- The LLM backend can, in principle, phrase things loosely; explanations are
+  **grounded** in the recommender's reasons and the local guide to limit this,
+  and the deterministic fallback removes the model from the loop entirely.
 
-I go deeper on these in the model card.
-
----
-
-## Stretch Features
-
-I did **not** implement any stretch features for this project. Everything above
-is the core, required functionality only, and no stretch credit is claimed.
+See [model_card.md](model_card.md) for misuse risks, reliability-testing
+surprises, and the AI-collaboration reflection.
 
 ---
 
-## Reflection
+## Documentation
 
-This project helped me understand how recommendation systems turn simple data
-into ranked predictions. My recommender does not learn like Spotify or YouTube,
-but it shows the basic idea: compare user preferences to item features, score
-every item, and rank the results. Claude helped me move faster with CSV loading,
-the scoring logic, and readable terminal output, but I still had to verify that
-the output made sense and that the explanations matched the actual scoring rules.
-
-Read and complete the model card for the full reflection:
-
-[**Model Card**](model_card.md)
+- [model_card.md](model_card.md) — intended use, limitations, misuse risks,
+  evaluation, reliability surprises, AI-collaboration reflection.
+- [ai_interactions.md](ai_interactions.md) — log of AI prompts, useful
+  suggestions, flawed suggestions, and implementation decisions.
